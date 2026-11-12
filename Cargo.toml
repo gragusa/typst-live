@@ -1,0 +1,13 @@
+[package]
+name = "zed_typst"
+description = "typst-live: Typst language support and synchronized previews for Zed."
+version = "0.2.2"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/typst.rs"
+
+[dependencies]
+zed_extension_api = "0.7.0"

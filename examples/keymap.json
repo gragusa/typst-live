@@ -1,0 +1,10 @@
+[
+  {
+    "context": "Editor && language == Typst",
+    "bindings": {
+      "alt-p": ["task::Spawn", {"task_name": "Typst: Synchronized Preview"}],
+      "alt-shift-p": ["task::Spawn", {"task_name": "Typst: Synchronized Slide Preview"}],
+      "alt-j": ["task::Spawn", {"task_name": "Typst: Sync Preview to Cursor"}]
+    }
+  }
+]

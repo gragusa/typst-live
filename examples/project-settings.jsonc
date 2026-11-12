@@ -1,0 +1,20 @@
+{
+  "lsp": {
+    "tinymist": {
+      "settings": {
+        "rootPath": "/absolute/path/to/project",
+        "typstExtraArgs": [
+          "--input",
+          "draft=true",
+          "/absolute/path/to/project/main.typ"
+        ],
+        "fontPaths": [
+          "/absolute/path/to/project/fonts"
+        ],
+        "systemFonts": true,
+        "exportPdf": "onSave",
+        "outputPath": "$root/build/$name"
+      }
+    }
+  }
+}

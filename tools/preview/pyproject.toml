@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zed-typst-preview"
+version = "0.2.0"
+description = "Cursor synchronization between Zed tasks and Tinymist browser previews"
+requires-python = ">=3.11"
+dependencies = ["websockets>=15,<18"]
+
+[project.scripts]
+zed-typst-preview = "zed_typst_preview:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/zed_typst_preview"]

@@ -1,0 +1,25 @@
+{
+  "languages": {
+    "Typst": {
+      "formatter": "language_server",
+      "format_on_save": "on",
+      "soft_wrap": "editor_width",
+      "tab_size": 2,
+      "inlay_hints": {
+        "enabled": true
+      }
+    }
+  },
+  "lsp": {
+    "tinymist": {
+      "settings": {
+        "formatterMode": "typstyle",
+        "formatterIndentSize": 2,
+        "formatterPrintWidth": 100,
+        "formatterProseWrap": false,
+        "exportPdf": "onSave",
+        "outputPath": "$dir/$name"
+      }
+    }
+  }
+}

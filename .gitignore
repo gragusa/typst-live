@@ -1,0 +1,6 @@
+**/.DS_Store
+target
+*.wasm
+grammars
+.venv/
+__pycache__/

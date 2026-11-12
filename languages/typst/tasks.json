@@ -1,0 +1,145 @@
+[
+  {
+    "label": "Typst: Export File",
+    "command": "typst",
+    "args": [
+      "compile",
+      "--root",
+      "$ZED_WORKTREE_ROOT",
+      "$ZED_FILE"
+    ],
+    "save": "all",
+    "hide": "on_success"
+  },
+  {
+    "label": "Typst: Export PNG",
+    "command": "typst",
+    "args": [
+      "compile",
+      "--root",
+      "$ZED_WORKTREE_ROOT",
+      "$ZED_FILE",
+      "$ZED_DIRNAME/$ZED_STEM-{p}.png"
+    ],
+    "save": "all",
+    "hide": "on_success"
+  },
+  {
+    "label": "Typst: Export SVG",
+    "command": "typst",
+    "args": [
+      "compile",
+      "--root",
+      "$ZED_WORKTREE_ROOT",
+      "$ZED_FILE",
+      "$ZED_DIRNAME/$ZED_STEM-{p}.svg"
+    ],
+    "save": "all",
+    "hide": "on_success"
+  },
+  {
+    "label": "Typst: Watch File",
+    "command": "typst",
+    "args": [
+      "watch",
+      "--root",
+      "$ZED_WORKTREE_ROOT",
+      "$ZED_FILE"
+    ],
+    "save": "all",
+    "allow_concurrent_runs": true,
+    "reveal": "no_focus"
+  },
+  {
+    "label": "Typst: Open Preview",
+    "command": "tinymist",
+    "args": [
+      "preview",
+      "--open",
+      "--data-plane-host",
+      "127.0.0.1:0",
+      "--control-plane-host",
+      "127.0.0.1:0",
+      "--root",
+      "$ZED_WORKTREE_ROOT",
+      "$ZED_FILE"
+    ],
+    "save": "all",
+    "allow_concurrent_runs": true,
+    "reveal": "no_focus"
+  },
+  {
+    "label": "Typst: Preview Slides",
+    "command": "tinymist",
+    "args": [
+      "preview",
+      "--open",
+      "--data-plane-host",
+      "127.0.0.1:0",
+      "--control-plane-host",
+      "127.0.0.1:0",
+      "--preview-mode",
+      "slide",
+      "--root",
+      "$ZED_WORKTREE_ROOT",
+      "$ZED_FILE"
+    ],
+    "save": "all",
+    "allow_concurrent_runs": true,
+    "reveal": "no_focus"
+  },
+  {
+    "label": "Typst: Synchronized Preview",
+    "command": "zed-typst-preview",
+    "args": [
+      "start",
+      "--root",
+      "$ZED_WORKTREE_ROOT",
+      "$ZED_FILE"
+    ],
+    "save": "none",
+    "allow_concurrent_runs": true,
+    "reveal": "no_focus"
+  },
+  {
+    "label": "Typst: Synchronized Slide Preview",
+    "command": "zed-typst-preview",
+    "args": [
+      "start",
+      "--root",
+      "$ZED_WORKTREE_ROOT",
+      "--mode",
+      "slide",
+      "$ZED_FILE"
+    ],
+    "save": "none",
+    "allow_concurrent_runs": true,
+    "reveal": "no_focus"
+  },
+  {
+    "label": "Typst: Sync Preview to Cursor",
+    "command": "zed-typst-preview",
+    "args": [
+      "sync",
+      "--root",
+      "$ZED_WORKTREE_ROOT",
+      "--file",
+      "$ZED_FILE",
+      "--row",
+      "$ZED_ROW",
+      "--column",
+      "$ZED_COLUMN"
+    ],
+    "save": "none",
+    "reveal": "no_focus",
+    "hide": "on_success"
+  },
+  {
+    "label": "Typst: List Fonts",
+    "command": "typst",
+    "args": [
+      "fonts"
+    ],
+    "reveal": "always"
+  }
+]

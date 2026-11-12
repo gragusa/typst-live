@@ -1,0 +1,16 @@
+id = "typst-live"
+name = "typst-live"
+description = "Typst editing with Tinymist, live document and slide previews, and cursor synchronization."
+version = "0.2.2"
+schema_version = 1
+authors = ["WeetHet <stas.ale66@gmail.com>"]
+repository = "https://github.com/gragusa/typst"
+snippets = ["snippets/typst.json"]
+
+[language_servers.tinymist]
+name = "Typst language support"
+language = "Typst"
+
+[grammars.typst]
+repository = "https://github.com/uben0/tree-sitter-typst"
+commit = "abe60cbed7986ee475d93f816c1be287f220c5d8"
