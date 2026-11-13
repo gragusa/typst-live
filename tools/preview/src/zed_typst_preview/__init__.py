@@ -547,9 +547,15 @@ def parser() -> argparse.ArgumentParser:
 async def run(args) -> None:
     loop = asyncio.get_running_loop()
     task = asyncio.current_task()
-    previous = signal.signal(
-        signal.SIGTERM, lambda *_: loop.call_soon_threadsafe(task.cancel)
-    )
+    # Closing a terminal sends SIGHUP. Cancelling instead of exiting immediately
+    # lets the preview stop Tinymist and remove its session record.
+    numbers = [signal.SIGTERM]
+    if hasattr(signal, "SIGHUP"):
+        numbers.append(signal.SIGHUP)
+    previous = {
+        number: signal.signal(number, lambda *_: loop.call_soon_threadsafe(task.cancel))
+        for number in numbers
+    }
     try:
         if args.command == "lsp":
             from .lsp import proxy
@@ -558,7 +564,8 @@ async def run(args) -> None:
         else:
             await (start(args) if args.command == "start" else sync(args))
     finally:
-        signal.signal(signal.SIGTERM, previous)
+        for number, handler in previous.items():
+            signal.signal(number, handler)
 
 
 def main() -> int:

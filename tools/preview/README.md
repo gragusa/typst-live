@@ -63,7 +63,7 @@ For a fixed entry point, define a project task in `.zed/tasks.json`:
     "args": ["start", "--root", "$ZED_WORKTREE_ROOT", "$ZED_WORKTREE_ROOT/main.typ"],
     "save": "none",
     "allow_concurrent_runs": true,
-    "reveal": "no_focus"
+    "reveal": "never"
   }
 ]
 ```

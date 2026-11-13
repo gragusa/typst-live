@@ -15,7 +15,7 @@
     ],
     "save": "none",
     "allow_concurrent_runs": true,
-    "reveal": "no_focus"
+    "reveal": "never"
   },
   {
     "label": "Typst: Synchronized Main Slide Preview",
@@ -35,6 +35,6 @@
     ],
     "save": "none",
     "allow_concurrent_runs": true,
-    "reveal": "no_focus"
+    "reveal": "never"
   }
 ]

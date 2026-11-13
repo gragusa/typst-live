@@ -78,10 +78,10 @@ The first two commands must give the results described in section 1. Then, in Ze
 
 1. Open your document's main `.typ` file and save it once so it exists on disk.
 2. Run **task: spawn** and choose **Typst: Synchronized Preview** or **Typst: Synchronized Slide Preview**.
-3. In the task terminal, wait for **Live preview connected to Zed's unsaved buffers**. Type in the source: the browser preview updates without saving, including edits to open chapter files.
+3. The preview opens in your browser. Its task terminal runs without opening Zed's terminal panel; open the panel with `` Ctrl+` `` (**terminal panel: toggle**) to check for **Live preview connected to Zed's unsaved buffers**, or to read the error if no browser window opens. Type in the source: the browser preview updates without saving, including edits to open chapter files.
 4. To move the preview to your caret, run **Typst: Sync Preview to Cursor**. This works in both document and slide mode. Use the preview's source-jump gesture on rendered text to open that position in Zed.
 
-Cursor-to-preview scrolling runs on demand. Only one synchronized preview runs per project worktree; stop it with `Ctrl+C` in its task terminal before switching between document and slide modes. This workflow requires a local workspace.
+Cursor-to-preview scrolling runs on demand. Only one synchronized preview runs per project worktree. To stop it, close its task terminal tab or press `Ctrl+C` in it; do this before switching between document and slide modes. Hiding the terminal panel leaves the preview running. This workflow requires a local workspace.
 
 For shortcuts, merge [examples/keymap.json](examples/keymap.json) into your Zed `keymap.json`:
 

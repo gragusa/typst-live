@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import signal
 import sys
 import tempfile
 import unittest
@@ -22,9 +23,14 @@ from websockets.asyncio.client import connect
 )
 class Tinymist(unittest.IsolatedAsyncioTestCase):
     @unittest.skipIf(
-        os.name == "nt", "Windows terminate() force-kills instead of delivering SIGTERM"
+        os.name == "nt", "Windows cannot deliver SIGTERM or SIGHUP to a child process"
     )
     async def test_cli_termination_cleans_up_session_and_server(self):
+        for number in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=number.name):
+                await self.check_termination(number)
+
+    async def check_termination(self, number):
         with tempfile.TemporaryDirectory(prefix="zed typst lifecycle ") as directory:
             root = Path(directory).resolve()
             entry = root / "main.typ"
@@ -63,7 +69,7 @@ class Tinymist(unittest.IsolatedAsyncioTestCase):
                             if process.returncode is not None:
                                 self.fail(output)
                             await asyncio.sleep(0.02)
-                    process.terminate()
+                    process.send_signal(number)
                     await asyncio.wait_for(process.wait(), 10)
                     self.assertEqual(list(runtime.glob("*.json")), [])
                     with self.assertRaises(OSError):

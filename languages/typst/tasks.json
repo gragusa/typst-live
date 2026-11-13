@@ -99,7 +99,7 @@
     ],
     "save": "none",
     "allow_concurrent_runs": true,
-    "reveal": "no_focus"
+    "reveal": "never"
   },
   {
     "label": "Typst: Synchronized Slide Preview",
@@ -114,7 +114,7 @@
     ],
     "save": "none",
     "allow_concurrent_runs": true,
-    "reveal": "no_focus"
+    "reveal": "never"
   },
   {
     "label": "Typst: Sync Preview to Cursor",
