@@ -17,11 +17,61 @@ import zed_typst_preview as preview
 from websockets.asyncio.client import connect
 
 
+async def launch(root, entry, environment, logs, mode="document"):
+    return await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "zed_typst_preview",
+        "start",
+        "--root",
+        str(root),
+        "--no-open",
+        "--mode",
+        mode,
+        "--tinymist",
+        os.environ["TINYMIST_TEST_BINARY"],
+        "--zed",
+        sys.executable,
+        str(entry),
+        stdout=logs,
+        stderr=logs,
+        env=environment,
+        # A Zed task runs as a session leader with Tinymist in its process group.
+        start_new_session=os.name != "nt",
+    )
+
+
+def output(logs):
+    logs.seek(0)
+    return logs.read()
+
+
+async def assert_closed(port):
+    with unittest.TestCase().assertRaises(OSError):
+        _reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.close()
+        await writer.wait_closed()
+
+
 @unittest.skipUnless(
     os.environ.get("TINYMIST_TEST_BINARY"),
     "set TINYMIST_TEST_BINARY for the real preview test",
 )
 class Tinymist(unittest.IsolatedAsyncioTestCase):
+    async def ready_port(self, process, logs):
+        """Return the data-plane port once the companion reports it."""
+        async with asyncio.timeout(20):
+            while True:
+                match = re.search(
+                    r"Synchronized preview ready: http://127\.0\.0\.1:(\d+)/",
+                    output(logs),
+                )
+                if match:
+                    return int(match[1])
+                if process.returncode is not None:
+                    self.fail(output(logs))
+                await asyncio.sleep(0.02)
+
     @unittest.skipIf(
         os.name == "nt", "Windows cannot deliver SIGTERM or SIGHUP to a child process"
     )
@@ -38,49 +88,75 @@ class Tinymist(unittest.IsolatedAsyncioTestCase):
             runtime = root / "runtime"
             environment = {**os.environ, "ZED_TYPST_PREVIEW_RUNTIME_DIR": str(runtime)}
             with tempfile.TemporaryFile(mode="w+") as logs:
-                process = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    "-m",
-                    "zed_typst_preview",
-                    "start",
-                    "--root",
-                    str(root),
-                    "--no-open",
-                    "--tinymist",
-                    os.environ["TINYMIST_TEST_BINARY"],
-                    "--zed",
-                    sys.executable,
-                    str(entry),
-                    stdout=logs,
-                    stderr=logs,
-                    env=environment,
-                )
+                process = await launch(root, entry, environment, logs)
                 try:
-                    async with asyncio.timeout(20):
-                        while True:
-                            logs.seek(0)
-                            output = logs.read()
-                            match = re.search(
-                                r"Synchronized preview ready: http://127\.0\.0\.1:(\d+)/",
-                                output,
-                            )
-                            if match:
-                                break
-                            if process.returncode is not None:
-                                self.fail(output)
-                            await asyncio.sleep(0.02)
+                    port = await self.ready_port(process, logs)
                     process.send_signal(number)
                     await asyncio.wait_for(process.wait(), 10)
                     self.assertEqual(list(runtime.glob("*.json")), [])
-                    with self.assertRaises(OSError):
-                        _reader, writer = await asyncio.open_connection(
-                            "127.0.0.1", int(match[1])
-                        )
-                        writer.close()
-                        await writer.wait_closed()
+                    await assert_closed(port)
                 finally:
                     if process.returncode is None:
                         process.kill()
+                        await process.wait()
+
+    @unittest.skipIf(os.name == "nt", "Windows cannot deliver SIGTERM to a child process")
+    async def test_starting_a_preview_replaces_the_running_one(self):
+        # Closing a task terminal makes Zed send SIGTERM and, 100 ms later,
+        # SIGKILL. A preview killed during cleanup leaves its record behind.
+        for closed in (False, True):
+            with self.subTest(closed_by_zed=closed):
+                await self.check_replacement(closed)
+
+    async def check_replacement(self, closed):
+        with tempfile.TemporaryDirectory(prefix="zed typst replacement ") as directory:
+            root = Path(directory).resolve()
+            entry = root / "main.typ"
+            entry.write_text("Replacement check.", encoding="utf-8")
+            runtime = root / "runtime"
+            environment = {**os.environ, "ZED_TYPST_PREVIEW_RUNTIME_DIR": str(runtime)}
+            with (
+                tempfile.TemporaryFile(mode="w+") as first_logs,
+                tempfile.TemporaryFile(mode="w+") as second_logs,
+            ):
+                first = await launch(root, entry, environment, first_logs)
+                processes = [first]
+                try:
+                    first_port = await self.ready_port(first, first_logs)
+                    [record] = runtime.glob("*.json")
+                    old = preview.read_session(record)
+                    if closed:
+                        os.killpg(first.pid, signal.SIGTERM)
+                        await asyncio.sleep(0.1)
+                        if first.returncode is None:
+                            first.kill()
+                    second = await launch(
+                        root, entry, environment, second_logs, mode="slide"
+                    )
+                    processes.append(second)
+                    second_port = await self.ready_port(second, second_logs)
+                    code = await asyncio.wait_for(first.wait(), 10)
+                    if closed:
+                        self.assertIn(code, (130, -signal.SIGKILL), output(first_logs))
+                    else:
+                        self.assertEqual(code, 0, output(first_logs))
+                        self.assertIn("replaced", output(first_logs))
+                        self.assertIn("Stopping the synchronized preview", output(second_logs))
+                    await assert_closed(first_port)
+                    await assert_closed(old["port"])
+                    [record] = runtime.glob("*.json")
+                    new = preview.read_session(record)
+                    self.assertNotEqual(new["token"], old["token"])
+                    await preview.request(new, {"event": "status"})
+                    second.terminate()
+                    await asyncio.wait_for(second.wait(), 10)
+                    self.assertEqual(list(runtime.glob("*.json")), [])
+                    await assert_closed(second_port)
+                finally:
+                    for process in processes:
+                        # Kill the group, or a failed check leaves Tinymist running.
+                        with contextlib.suppress(ProcessLookupError):
+                            os.killpg(process.pid, signal.SIGKILL)
                         await process.wait()
 
     async def test_jumps_in_both_directions_and_process_cleanup(self):
@@ -199,8 +275,6 @@ class Tinymist(unittest.IsolatedAsyncioTestCase):
                         self.assertTrue(
                             arguments[2].startswith(f"{chapter}:2:"), arguments
                         )
-                        with self.assertRaisesRegex(ValueError, "already runs"):
-                            await preview.start(args)
                 except BaseException:
                     print(logs.getvalue(), file=sys.__stderr__)
                     raise

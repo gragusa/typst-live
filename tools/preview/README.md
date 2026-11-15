@@ -51,7 +51,7 @@ Synchronized preview and cursor-sync tasks do not save buffers. Cursor jumps use
 
 ## Multi-file documents and custom settings
 
-The launch file remains the preview's entry point. Editing and syncing from an included chapter does not switch the entry point. Only one synchronized preview can run for a worktree at a time; stop its terminal before switching between document and slide modes. Different worktrees have separate sessions.
+The launch file remains the preview's entry point. Editing and syncing from an included chapter does not switch the entry point. Only one synchronized preview can run for a worktree at a time. Starting one, in either mode, stops the running preview and waits for it to remove its session record; the replaced preview reports this in its terminal and exits with status 0. Different worktrees have separate sessions.
 
 For a fixed entry point, define a project task in `.zed/tasks.json`:
 
@@ -88,7 +88,7 @@ Zed task positions use one-based rows and UTF-8 byte columns. Tinymist's current
 
 The sync task confirms that a scroll request was sent. Tinymist does not acknowledge a successful source-to-rendered-position match. A position in comments, whitespace, or unrendered code may have no matching preview position. The renderer may also be catching up with the latest edit.
 
-Use Ctrl-C in the task terminal to stop the companion, terminate its Tinymist child, and remove its session record. Startup, protocol, and editor-launch failures appear in the task terminal. If the sync task says a session is unreachable, restart the synchronized preview.
+Use Ctrl-C in the task terminal to stop the companion, terminate its Tinymist child, and remove its session record. Closing the task terminal sends SIGTERM to the task's process group and SIGKILL 100 ms later, which can leave the record behind; the next synchronized preview finds that no process answers for it and removes it. Startup, protocol, and editor-launch failures appear in the task terminal. The sync task runs without opening the terminal panel and keeps its terminal tab only when it fails. If it says a session is unreachable, restart the synchronized preview.
 
 The implementation uses Tinymist's standalone preview control protocol and compatibility log messages. Those interfaces may change between releases; unsupported behavior produces an error. It has been tested against the locally installed Tinymist build using Typst 0.15.1.
 

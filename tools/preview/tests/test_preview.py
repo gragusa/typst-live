@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import zed_typst_preview as preview
+from websockets.exceptions import ConnectionClosed
 
 
 class Coordinates(unittest.TestCase):
@@ -101,9 +102,10 @@ class Connection(unittest.IsolatedAsyncioTestCase):
         self.file.write_text("é target", encoding="utf-8")
         self.websocket = AsyncMock()
         self.token = "test-token-" * 4
+        self.stop = asyncio.Event()
         self.server = await asyncio.start_server(
             lambda reader, writer: preview.serve_request(
-                reader, writer, self.websocket, self.root, self.token
+                reader, writer, self.websocket, self.root, self.token, stop=self.stop
             ),
             "127.0.0.1",
             0,
@@ -147,6 +149,25 @@ class Connection(unittest.IsolatedAsyncioTestCase):
     async def test_status_does_not_change_the_preview(self):
         await preview.request(self.session, {"event": "status"})
         self.websocket.send.assert_not_called()
+        self.assertFalse(self.stop.is_set())
+
+    async def test_stop_request_signals_the_preview_without_touching_tinymist(self):
+        await preview.request(self.session, {"event": "stop"})
+        self.assertTrue(self.stop.is_set())
+        self.websocket.send.assert_not_called()
+
+    async def test_invalid_token_cannot_stop_the_preview(self):
+        with self.assertRaisesRegex(ValueError, "Invalid preview session token"):
+            await preview.request({**self.session, "token": "x" * 44}, {"event": "stop"})
+        self.assertFalse(self.stop.is_set())
+
+    async def test_closed_tinymist_connection_asks_the_editor_to_retry(self):
+        # The editor proxy treats a retry as transient; any other error stops it.
+        self.websocket.send.side_effect = ConnectionClosed(None, None)
+        with self.assertRaises(preview.PreviewNotReady):
+            await preview.request(
+                self.session, {"event": "buffers", "files": {str(self.file): "é"}}
+            )
 
     async def test_invalid_source_position_is_reported_to_the_task(self):
         with self.assertRaises(ValueError):

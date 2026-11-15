@@ -206,6 +206,39 @@ async def request(session: dict, payload: dict) -> dict:
             await writer.wait_closed()
 
 
+def current_session(path: Path) -> dict | None:
+    try:
+        return read_session(path)
+    except FileNotFoundError:
+        return None
+
+
+async def stop_previous(path: Path, timeout: float = 15) -> None:
+    """Stop the worktree's running preview and wait until it removes its record."""
+    old = current_session(path)
+    if old is None:
+        return
+    try:
+        await request(old, {"event": "stop"})
+    except (ConnectionError, TimeoutError):
+        # No preview answers for this record. Remove it only if it is still the one inspected.
+        if current_session(path) == old:
+            path.unlink(missing_ok=True)
+        return
+    print(
+        "Stopping the synchronized preview already running for this worktree",
+        flush=True,
+    )
+    try:
+        async with asyncio.timeout(timeout):
+            while current_session(path) == old:
+                await asyncio.sleep(0.05)
+    except TimeoutError:
+        raise ValueError(
+            "The running synchronized preview did not stop. Close its task terminal and retry."
+        ) from None
+
+
 async def sync(args) -> None:
     root = args.root.resolve(strict=True)
     path = session_path(root)
@@ -268,7 +301,9 @@ async def serve_request(
     root: Path,
     token: str,
     buffers: PreviewBuffers | None = None,
+    stop: asyncio.Event | None = None,
 ) -> None:
+    """Answer one request; a `stop` request sets `stop` for the running preview."""
     buffers = buffers if buffers is not None else PreviewBuffers()
     try:
         async with asyncio.timeout(5):
@@ -300,6 +335,8 @@ async def serve_request(
                     "Live editor buffers disconnected; preview reads saved files",
                     flush=True,
                 )
+            elif payload.get("event") == "stop" and stop is not None:
+                stop.set()
             elif payload.get("event") != "status":
                 raise ValueError("Unknown preview request")
             response = {
@@ -316,7 +353,9 @@ async def serve_request(
         ConnectionClosed,
     ) as error:
         response = {"ok": False, "error": str(error)}
-        if isinstance(error, PreviewNotReady):
+        # A closed Tinymist connection means this preview is exiting. The editor
+        # proxy retries, then follows the session record to the next preview.
+        if isinstance(error, (PreviewNotReady, ConnectionClosed)):
             response["retry"] = True
     try:
         writer.write((json.dumps(response) + "\n").encode())
@@ -383,20 +422,6 @@ async def start(args) -> None:
         raise ValueError(
             "Both tinymist and zed must be executable; check PATH or --tinymist/--zed"
         )
-    path = session_path(root)
-    if path.exists():
-        old = read_session(path)
-        try:
-            await request(old, {"event": "status"})
-        except (ConnectionError, TimeoutError):
-            # Remove only the stale record we inspected.
-            if read_session(path) == old:
-                path.unlink()
-        else:
-            raise ValueError(
-                "A synchronized preview already runs for this worktree. Stop its task terminal first."
-            )
-
     extra = args.extra[1:] if args.extra[:1] == ["--"] else args.extra
     reserved = {
         "--open",
@@ -413,6 +438,9 @@ async def start(args) -> None:
         raise ValueError(
             "Use the companion's --root/--mode options; preview network options are managed automatically"
         )
+    # Validate this invocation before replacing a working preview.
+    path = session_path(root)
+    await stop_previous(path)
     process = await asyncio.create_subprocess_exec(
         tinymist,
         "preview",
@@ -451,9 +479,10 @@ async def start(args) -> None:
             max_size=8 * 1024 * 1024,
         ) as websocket:
             buffers = PreviewBuffers(wait_for_compile=True)
+            stop = asyncio.Event()
             server = await asyncio.start_server(
                 lambda reader, writer: serve_request(
-                    reader, writer, websocket, root, token, buffers
+                    reader, writer, websocket, root, token, buffers, stop
                 ),
                 "127.0.0.1",
                 0,
@@ -477,13 +506,20 @@ async def start(args) -> None:
                     report_missing_live_connection(buffers)
                 )
                 child = asyncio.create_task(process.wait())
-                tasks.extend([messages, child])
+                replaced = asyncio.create_task(stop.wait())
+                tasks.extend([messages, child, replaced])
                 try:
                     done, _ = await asyncio.wait(
                         tasks, return_when=asyncio.FIRST_COMPLETED
                     )
                     for task in done:
                         task.result()
+                    if replaced in done:
+                        print(
+                            "Preview stopped: a new synchronized preview replaced it",
+                            flush=True,
+                        )
+                        return
                     raise RuntimeError(
                         f"Tinymist preview stopped (exit code {process.returncode})"
                     )
@@ -515,7 +551,9 @@ def parser() -> argparse.ArgumentParser:
     )
     commands = result.add_subparsers(dest="command", required=True)
     launch = commands.add_parser(
-        "start", help="Start a preview that supports jumps to and from Zed"
+        "start",
+        help="Start a preview that supports jumps to and from Zed, "
+        "replacing the worktree's running preview",
     )
     launch.add_argument("--root", type=Path, required=True)
     launch.add_argument("--mode", choices=["document", "slide"], default="document")

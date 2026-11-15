@@ -131,7 +131,7 @@
       "$ZED_COLUMN"
     ],
     "save": "none",
-    "reveal": "no_focus",
+    "reveal": "never",
     "hide": "on_success"
   },
   {
