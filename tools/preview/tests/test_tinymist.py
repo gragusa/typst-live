@@ -42,8 +42,12 @@ async def launch(root, entry, environment, logs, mode="document"):
 
 
 def output(logs):
-    logs.seek(0)
-    return logs.read()
+    # The companion writes through the same file description, so moving its
+    # offset would make later writes overwrite earlier output.
+    descriptor = logs.fileno()
+    return os.pread(descriptor, os.fstat(descriptor).st_size, 0).decode(
+        errors="replace"
+    )
 
 
 async def assert_closed(port):

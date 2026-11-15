@@ -1,5 +1,7 @@
 import argparse
 import asyncio
+import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -207,6 +209,46 @@ class Connection(unittest.IsolatedAsyncioTestCase):
             json.loads(self.websocket.send.call_args.args[0]),
             {"event": "syncMemoryFiles", "files": {}},
         )
+
+    async def test_unopenable_preview_clicks_are_reported_and_skipped(self):
+        package = Path(self.temporary.name).parent / "packages" / "utils.typ"
+        failing, working = AsyncMock(), AsyncMock()
+        failing.wait.return_value = 1
+        working.wait.return_value = 0
+
+        async def messages():
+            # Package code that generates slide content lies outside the worktree.
+            yield json.dumps(
+                {"event": "editorScrollTo", "filepath": str(package), "start": [0, 0]}
+            )
+            yield json.dumps(
+                {"event": "editorScrollTo", "filepath": str(self.file), "start": [9, 0]}
+            )
+            for _ in range(2):
+                yield json.dumps(
+                    {"event": "editorScrollTo", "filepath": str(self.file), "start": [0, 2]}
+                )
+
+        self.websocket.__aiter__.side_effect = messages
+        logs = io.StringIO()
+        with (
+            patch.object(
+                preview.asyncio,
+                "create_subprocess_exec",
+                side_effect=[failing, working],
+            ) as spawn,
+            contextlib.redirect_stderr(logs),
+            self.assertRaisesRegex(RuntimeError, "closed the preview"),
+        ):
+            await preview.editor_messages(self.websocket, self.root, "zed")
+        self.assertEqual(spawn.await_count, 2)
+        spawn.assert_awaited_with("zed", "--existing", f"{self.file}:1:4")
+        reports = logs.getvalue().splitlines()
+        self.assertEqual(len(reports), 3, reports)
+        self.assertIn("must be a file inside", reports[0])
+        self.assertIn("Row outside", reports[1])
+        self.assertIn("Zed could not open", reports[2])
+        self.assertTrue(all(r.startswith("Preview click not opened in Zed: ") for r in reports))
 
     async def test_missing_preview_has_an_actionable_error(self):
         with (
