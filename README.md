@@ -20,7 +20,7 @@ Add this line **at the end of `~/.zshrc`**, then open a new terminal:
 export PATH="$(brew --prefix rustup)/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
 ```
 
-This line is required. Homebrew installs rustup keg-only: it links `rustup` itself into Homebrew's `bin` directory but not the `cargo` and `rustc` it manages, so they are on `PATH` only through this line. It also puts them ahead of a standalone Homebrew Rust installation (the `rust` formula), which lacks the WebAssembly target. You can remove that installation with `brew uninstall rust` if you do not need it; keep the line either way. Set up rustup's toolchain:
+Set up rustup's toolchain:
 
 ```sh
 rustup toolchain install stable --profile minimal
@@ -35,13 +35,11 @@ which cargo
 ls "$(rustc --print sysroot)/lib/rustlib" | grep wasm32-wasip2
 ```
 
-`which cargo` must print `$(brew --prefix rustup)/bin/cargo` (on Apple silicon, `/opt/homebrew/opt/rustup/bin/cargo`), and the second command must print `wasm32-wasip2`. Zed builds the extension with the first `cargo` on `PATH`. `rustup target list --installed` does not test this: it lists rustup's targets even when another `cargo` comes first.
-
 In Zed's command palette (`Cmd+Shift+P`), run **cli: install cli binary** to install the `zed` command used for preview-to-editor jumps. See [Zed's CLI instructions](https://zed.dev/docs/reference/cli).
 
 On Linux or Windows, install the same tools using their platform installers, make their executables available on `PATH`, and use rustup with the `wasm32-wasip2` target. See [Zed's dev-extension requirements](https://zed.dev/docs/extensions/developing-extensions).
 
-## 2. Install the companion and extension
+## Install the companion and extension
 
 Clone the repository into a permanent location:
 
@@ -52,27 +50,14 @@ uv tool install --python 3.12 --editable ./tools/preview
 uv tool update-shell
 ```
 
-If you already have this checkout, use it instead of cloning again. Keep the checkout in place: both the dev extension and the editable companion use its files.
-
-Open a new terminal, fully quit Zed (`Cmd+Q`), then launch it with `zed .`. Zed reads `PATH` from your shell only when it starts, so restart it after any `PATH` change. From a Zed terminal, verify that the commands are available:
-
-```sh
-which cargo
-ls "$(rustc --print sysroot)/lib/rustlib" | grep wasm32-wasip2
-tinymist --version
-typst --version
-zed --version
-zed-typst-preview --version
-```
-
-The first two commands must give the results described in section 1. Then, in Zed:
+## Install extension
 
 1. Disable or uninstall the original **Typst** extension. If you installed an older dev version of this fork with ID `typst`, remove that dev installation too.
 2. Run **zed: install dev extension** from the command palette and select this checkout's root directory, containing `extension.toml`.
 3. Wait for the build to finish. The extension is listed as **typst-live**. Zed downloads the grammar compiler automatically.
 4. Open your Typst project folder and focus a `.typ` file. Run **editor: restart language server**.
 
-## 3. Use live previews and synchronization
+## Use live previews and synchronization
 
 **No `settings.json` entries are required to enable synchronization.** The extension automatically connects the companion to Tinymist when `zed-typst-preview` is on Zed's shell `PATH`.
 
@@ -101,15 +86,3 @@ The ordinary **Typst: Open Preview** and **Typst: Preview Slides** tasks read sa
 - **Custom main file, fonts, or inputs:** preview tasks use a separate Tinymist process and do not inherit `lsp.tinymist.settings`. Use the [project task examples](examples/synchronized-preview.tasks.json) and [companion guide](tools/preview/README.md#multi-file-documents-and-custom-settings).
 
 For optional formatting, PDF export, and compiler configuration, see the [settings guide](docs/SETTINGS.md) and [settings examples](examples/settings.jsonc). The settings keys remain `languages.Typst` and `lsp.tinymist`.
-
-## Updating
-
-From the checkout, after pulling changes:
-
-```sh
-uv tool install --force --python 3.12 --editable ./tools/preview
-```
-
-Rebuild **typst-live** from Zed's Extensions page, focus a `.typ` file, run **editor: restart language server**, and restart the synchronized preview.
-
-See the [companion guide](tools/preview/README.md) for CLI options and tests, and the [roadmap](docs/ROADMAP.md) for remaining features.
