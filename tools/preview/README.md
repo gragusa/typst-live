@@ -1,11 +1,12 @@
 # Synchronized Typst preview for Zed
 
-This optional companion for **typst-live** connects Zed task cursor positions to Tinymist's browser preview. Its package and command name are `zed-typst-preview`. It supports:
+This companion for **typst-live** connects Zed task cursor positions to Tinymist's browser preview and chooses the Typst root for every preview, export, and watch task. Its package and command name are `zed-typst-preview`. It supports:
 
 - **Source to preview:** run a task or press a shortcut to scroll to the current cursor position.
 - **Preview to source:** use Tinymist's source-jump gesture on rendered text to open the matching location in Zed.
 - Document and slide previews, including source locations in included files.
 - Preview updates while typing, including unsaved edits in open chapter files.
+- Running `typst compile`, `typst watch`, and `tinymist preview` with the chosen Typst root.
 
 Preview content updates while typing. Cursor-to-preview scrolling runs when you invoke the task; Zed's public extension API does not expose continuous cursor movement events.
 
@@ -18,7 +19,7 @@ uv tool install --python 3.12 --editable ./tools/preview
 uv tool update-shell
 ```
 
-uv provides Python and the package dependencies. Open a new terminal and ensure `zed-typst-preview`, `tinymist`, and `zed` are on Zed's shell `PATH`. Rebuild the dev extension, focus a `.typ` file, and run **editor: restart language server** after installing the companion. The extension automatically uses the companion's `lsp` command to forward its Tinymist connection and mirror open buffers. The ordinary preview tasks remain available without this companion.
+uv provides Python and the package dependencies. Open a new terminal and ensure `zed-typst-preview`, `tinymist`, and `zed` are on Zed's shell `PATH`. Rebuild the dev extension, focus a `.typ` file, and run **editor: restart language server** after installing the companion. The extension automatically uses the companion's `lsp` command to forward its Tinymist connection and mirror open buffers. The extension's preview, export, and watch tasks also run through the companion.
 
 With the dev extension installed, open your document's main file and run **Typst: Synchronized Preview** or **Typst: Synchronized Slide Preview** from **task: spawn**. The main file must exist on disk, but subsequent edits do not need to be saved. The task prints **Live preview connected to Zed's unsaved buffers** when the language-server connection is active. Move your cursor in any file belonging to that document and run **Typst: Sync Preview to Cursor** to scroll the preview.
 
@@ -51,7 +52,15 @@ Synchronized preview and cursor-sync tasks do not save buffers. Cursor jumps use
 
 ## Multi-file documents and custom settings
 
-The launch file remains the preview's entry point. Editing and syncing from an included chapter does not switch the entry point. Only one synchronized preview can run for a worktree at a time. Starting one, in either mode, stops the running preview and waits for it to remove its session record; the replaced preview reports this in its terminal and exits with status 0. Different worktrees have separate sessions.
+The launch file remains the preview's entry point. Editing and syncing from an included chapter does not switch the entry point. The Typst root is the worktree when the launch file lies inside it. A file opened from outside every project folder uses its own directory as the root, which is Typst's default, and the preview terminal reports this. Only one synchronized preview can run for a root at a time. Starting one, in either mode, stops the running preview and waits for it to remove its session record; the replaced preview reports this in its terminal and exits with status 0. Different roots have separate sessions.
+
+The extension's other preview, export, and watch tasks apply the same rule through `run`, which inserts `--root` after the subcommand and replaces itself with the tool:
+
+```sh
+zed-typst-preview run --root /path/to/project --file /path/to/main.typ -- typst compile /path/to/main.typ
+```
+
+`run` accepts only `typst compile`, `typst watch`, and `tinymist preview`, and refuses a command that sets `--root` itself.
 
 For a fixed entry point, define a project task in `.zed/tasks.json`:
 
@@ -80,7 +89,7 @@ Preview clicks invoke `zed --existing file:row:column` on the machine running th
 
 ## Behavior and failure reporting
 
-The companion holds Tinymist's control WebSocket open and receives preview source locations. Cursor tasks send authenticated requests to a separate localhost socket. Session records live in a private temporary directory, keyed by the canonical worktree path. Stale records are replaced when the previous process is unreachable.
+The companion holds Tinymist's control WebSocket open and receives preview source locations. Cursor tasks send authenticated requests to a separate localhost socket. Session records live in a private temporary directory, keyed by the canonical Typst root. Stale records are replaced when the previous process is unreachable.
 
 The `lsp` command forwards Zed's LSP frames to Tinymist and Tinymist's replies back to Zed without changing their bytes. It keeps open document text in memory, applies incremental edits using the negotiated UTF-8, UTF-16, or UTF-32 position encoding, and mirrors changed files into the preview through Tinymist's memory-file protocol. Launching a preview after editing replays the current buffers. Closing a buffer removes its override; stopping the language-server proxy detaches its buffers. Unsaved text is not written to the session files or source files.
 

@@ -31,7 +31,7 @@ The registry and repository checks use the current [extension registry](https://
 
 Dev mode is not a synchronization requirement. A registry-installed extension can use the same companion through Zed's language-server command API.
 
-The current extension looks for `zed-typst-preview` on the worktree's shell `PATH`; it does not install it. Preview tasks also need `tinymist` and `zed` on the terminal's `PATH`. The companion currently requires Python 3.11 or newer and the `websockets` dependency.
+The current extension looks for `zed-typst-preview` on the worktree's shell `PATH`; it does not install it. The preview, export, and watch tasks run through it to choose the Typst root, so they fail without it. Preview tasks also need `tinymist` and `zed` on the terminal's `PATH`. The companion currently requires Python 3.11 or newer and the `websockets` dependency.
 
 Manual external-tool installation is not itself prohibited by the listed publishing prerequisites: those rules explicitly permit discovering tools in the user's environment. However, a marketplace user will not automatically have a checkout containing `tools/preview`. Before release, provide a documented installation route from an available source commit or a separately distributed companion package, and validate it on a clean installation. Automatic companion setup would improve installation, but is not a stated universal registry requirement.
 

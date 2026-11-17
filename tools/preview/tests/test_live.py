@@ -33,14 +33,63 @@ async def response(process, request_id):
                 return message
 
 
+async def language_server(worktree, folder, environment, logs, processes):
+    """Start and initialize an LSP proxy for a Zed worktree."""
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "zed_typst_preview",
+        "lsp",
+        "--root",
+        str(worktree),
+        "--server",
+        os.environ["TINYMIST_TEST_BINARY"],
+        "--",
+        "lsp",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=logs,
+        env=environment,
+    )
+    processes.append(process)
+    await send(
+        process,
+        {
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "processId": os.getpid(),
+                "rootUri": folder.as_uri(),
+                "capabilities": {
+                    "general": {"positionEncodings": ["utf-8", "utf-16"]}
+                },
+                "workspaceFolders": [{"uri": folder.as_uri(), "name": "test"}],
+            },
+        },
+    )
+    await response(process, 1)
+    await send(process, {"method": "initialized", "params": {}})
+    return process
+
+
 @unittest.skipUnless(
     os.environ.get("TINYMIST_TEST_BINARY"),
     "set TINYMIST_TEST_BINARY for live-buffer integration",
 )
 class LiveBuffers(unittest.IsolatedAsyncioTestCase):
     async def test_unsaved_edits_replay_update_and_close_without_disk_writes(self):
+        for outside in (False, True):
+            with self.subTest(outside_the_worktree=outside):
+                await self.check_unsaved_edits(outside)
+
+    async def check_unsaved_edits(self, outside):
+        # For files opened from outside every project folder, Zed's tasks name
+        # an unrelated project folder and each file's language server receives
+        # the file itself as its worktree.
         with tempfile.TemporaryDirectory(prefix="typst live integration ") as directory:
             root = Path(directory).resolve()
+            project = root / "project"
+            project.mkdir()
             entry = root / "main.typ"
             chapter = root / "chapter with spaces.typ"
             entry.write_text(
@@ -53,50 +102,24 @@ class LiveBuffers(unittest.IsolatedAsyncioTestCase):
                 "ZED_TYPST_PREVIEW_RUNTIME_DIR": str(root / "runtime"),
             }
             with tempfile.TemporaryFile(mode="w+") as logs:
-                lsp = await asyncio.create_subprocess_exec(
-                    sys.executable,
-                    "-m",
-                    "zed_typst_preview",
-                    "lsp",
-                    "--root",
-                    str(root),
-                    "--server",
-                    os.environ["TINYMIST_TEST_BINARY"],
-                    "--",
-                    "lsp",
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=logs,
-                    env=environment,
-                )
+                processes = []
                 browser_process = None
                 try:
-                    await send(
-                        lsp,
-                        {
-                            "id": 1,
-                            "method": "initialize",
-                            "params": {
-                                "processId": os.getpid(),
-                                "rootUri": root.as_uri(),
-                                "capabilities": {
-                                    "general": {
-                                        "positionEncodings": ["utf-8", "utf-16"]
-                                    }
-                                },
-                                "workspaceFolders": [
-                                    {"uri": root.as_uri(), "name": "test"}
-                                ],
-                            },
-                        },
-                    )
-                    await response(lsp, 1)
-                    await send(lsp, {"method": "initialized", "params": {}})
+                    # Zed starts one language server per worktree, and a file
+                    # opened from outside the project folders is its own worktree.
+                    servers = {}
+                    for path in (entry, chapter):
+                        worktree = path if outside else root
+                        if worktree not in servers:
+                            servers[worktree] = await language_server(
+                                worktree, root, environment, logs, processes
+                            )
+                        servers[path] = servers[worktree]
                     unsaved = "#pagebreak()\nCafé α 😀 final text."
                     # These buffers are opened and edited before the preview is even launched.
                     for path, text in [(entry, entry.read_text()), (chapter, unsaved)]:
                         await send(
-                            lsp,
+                            servers[path],
                             {
                                 "method": "textDocument/didOpen",
                                 "params": {
@@ -115,7 +138,7 @@ class LiveBuffers(unittest.IsolatedAsyncioTestCase):
                         "zed_typst_preview",
                         "start",
                         "--root",
-                        str(root),
+                        str(project if outside else root),
                         "--no-open",
                         "--zed",
                         sys.executable,
@@ -151,8 +174,12 @@ class LiveBuffers(unittest.IsolatedAsyncioTestCase):
                     )  # derive using the test's explicit runtime below
                     key = root / "runtime" / key.name
                     session = preview.read_session(key)
-                    status = await preview.request(session, {"event": "status"})
-                    self.assertEqual(status["buffer_count"], 2)
+                    # Each proxy sends its buffers separately; the preview holds both.
+                    async with asyncio.timeout(5):
+                        while (
+                            await preview.request(session, {"event": "status"})
+                        )["buffer_count"] != 2:
+                            await asyncio.sleep(0.05)
                     async with connect(
                         url.replace("http://", "ws://"),
                         origin=url.rstrip("/"),
@@ -197,7 +224,7 @@ class LiveBuffers(unittest.IsolatedAsyncioTestCase):
                         await jump(2, column, 2)
                         # Insert a page while typing. There is no didSave and no disk write.
                         await send(
-                            lsp,
+                            servers[chapter],
                             {
                                 "method": "textDocument/didChange",
                                 "params": {
@@ -222,7 +249,7 @@ class LiveBuffers(unittest.IsolatedAsyncioTestCase):
                         await jump(4, column, 3)
                         self.assertEqual(chapter.read_text(), saved)
                         await send(
-                            lsp,
+                            servers[chapter],
                             {
                                 "method": "textDocument/didClose",
                                 "params": {"textDocument": {"uri": chapter.as_uri()}},
@@ -231,11 +258,12 @@ class LiveBuffers(unittest.IsolatedAsyncioTestCase):
                         await asyncio.sleep(0.05)
                         await jump(1, 1, 1)
                         self.assertEqual(chapter.read_text(), saved)
-                    await send(lsp, {"id": 2, "method": "shutdown", "params": None})
-                    await response(lsp, 2)
-                    await send(lsp, {"method": "exit"})
-                    await asyncio.wait_for(lsp.wait(), 10)
-                    self.assertEqual(lsp.returncode, 0)
+                    for lsp in processes:
+                        await send(lsp, {"id": 2, "method": "shutdown", "params": None})
+                        await response(lsp, 2)
+                        await send(lsp, {"method": "exit"})
+                        await asyncio.wait_for(lsp.wait(), 10)
+                        self.assertEqual(lsp.returncode, 0)
                 except BaseException:
                     logs.seek(0)
                     diagnostic = (
@@ -249,7 +277,7 @@ class LiveBuffers(unittest.IsolatedAsyncioTestCase):
                     )
                     raise
                 finally:
-                    for process in [browser_process, lsp]:
+                    for process in [browser_process, *processes]:
                         if process is not None and process.returncode is None:
                             process.terminate()
                             try:

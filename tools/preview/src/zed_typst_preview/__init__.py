@@ -11,6 +11,7 @@ import secrets
 import shutil
 import signal
 import stat
+import subprocess
 import sys
 import tempfile
 import webbrowser
@@ -20,12 +21,80 @@ from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
 
+def project_root(worktree: Path, filename: str | Path) -> Path:
+    """Choose the Typst root for a source file opened from a Zed worktree.
+
+    The worktree is the root when it contains the file. Otherwise the root is
+    the file's directory, Typst's default root. For a file opened from outside
+    every project folder, Zed's `ZED_WORKTREE_ROOT` names the first project
+    folder, and the file's language server receives the file itself as its
+    worktree.
+    """
+    worktree = worktree_directory(worktree)
+    path = Path(filename).resolve()
+    return worktree if path.is_relative_to(worktree) else path.parent
+
+
+def worktree_directory(worktree: Path) -> Path:
+    """Return a worktree's directory; a single-file worktree's is the file's parent."""
+    worktree = worktree.resolve(strict=True)
+    return worktree if worktree.is_dir() else worktree.parent
+
+
 def source_file(root: Path, filename: str, buffers: dict | None = None) -> Path:
     path = Path(filename).resolve()
     in_memory = buffers is not None and str(path) in buffers
     if not path.is_relative_to(root) or not (in_memory or path.is_file()):
         raise ValueError(f"Source must be a file inside {root}: {path}")
     return path
+
+
+def typst_source(worktree: Path, filename: str | Path) -> tuple[Path, Path]:
+    """Return the Typst root and entry file, reporting a root outside the worktree."""
+    worktree = worktree_directory(worktree)
+    root = project_root(worktree, filename)
+    entry = source_file(root, str(filename))
+    if root != worktree:
+        print(
+            f"{entry} is outside the worktree {worktree}; "
+            f"using its directory {root} as the Typst root",
+            flush=True,
+        )
+    return root, entry
+
+
+TOOLS = {("typst", "compile"), ("typst", "watch"), ("tinymist", "preview")}
+
+
+def check_tool(command: list[str]) -> None:
+    if len(command) < 2 or (Path(command[0]).stem, command[1]) not in TOOLS:
+        raise ValueError(
+            "run accepts only 'typst compile', 'typst watch', and 'tinymist preview'"
+        )
+    if any(argument.split("=", 1)[0] == "--root" for argument in command):
+        raise ValueError(
+            "Pass the worktree to the companion's --root; it chooses the Typst root"
+        )
+
+
+def tool_command(root: Path, command: list[str]) -> list[str]:
+    """Insert the Typst root after the subcommand of a Typst or Tinymist command."""
+    check_tool(command)
+    return [command[0], command[1], "--root", str(root), *command[2:]]
+
+
+def run_tool(args) -> int:
+    tool = args.tool[1:] if args.tool[:1] == ["--"] else args.tool
+    check_tool(tool)
+    executable = shutil.which(tool[0])
+    if executable is None:
+        raise ValueError(f"{tool[0]} must be executable; check PATH")
+    root, _entry = typst_source(args.root, args.file)
+    command = tool_command(root, tool)
+    if os.name == "nt":
+        return subprocess.run([executable, *command[1:]]).returncode
+    # Replacing the process delivers the task terminal's signals to the tool.
+    os.execv(executable, command)
 
 
 def source_line(path: Path, row: int, buffers: dict | None = None) -> str:
@@ -129,9 +198,24 @@ class PreviewNotReady(ValueError):
     """The preview is running but its initial compilation is still in progress."""
 
 
+def editor_id(client) -> str:
+    if not isinstance(client, str) or not client:
+        raise TypeError("Preview buffer request has no editor ID")
+    return client
+
+
 class PreviewBuffers:
+    """Unsaved buffers from every connected editor proxy.
+
+    Zed starts one language server, and so one proxy, per worktree, and gives
+    each file opened from outside the project folders its own worktree. One
+    preview can therefore receive buffers from several proxies. Tinymist holds
+    the union; when two proxies send the same file, the latest update wins.
+    """
+
     def __init__(self, wait_for_compile: bool = False):
         self.files = {}
+        self.editors = {}
         self.connected = False
         self.live_connection = asyncio.Event()
         self.lock = asyncio.Lock()
@@ -139,15 +223,30 @@ class PreviewBuffers:
         if not wait_for_compile:
             self.initial_compile.set()
 
-    async def update(self, websocket, root: Path, files: dict) -> None:
+    async def update(self, websocket, root: Path, client: str, files: dict) -> None:
         # A snapshot sent before Tinymist's initial compile can be superseded by
         # that in-flight disk compilation. Replay after its completion status.
         if not self.initial_compile.is_set():
             raise PreviewNotReady("Preview is still compiling its initial document")
+        client = editor_id(client)
         async with self.lock:
-            await self._update(websocket, root, files)
+            await self._update(websocket, root, client, files)
 
-    async def _update(self, websocket, root: Path, files: dict) -> None:
+    async def disconnect(self, websocket, client: str) -> None:
+        client = editor_id(client)
+        async with self.lock:
+            if self.editors.pop(client, None) is None:
+                return
+            await self._mirror(websocket)
+            if not self.editors:
+                self.connected = False
+                self.live_connection.clear()
+                print(
+                    "Live editor buffers disconnected; preview reads saved files",
+                    flush=True,
+                )
+
+    async def _update(self, websocket, root: Path, client: str, files: dict) -> None:
         if not isinstance(files, dict) or not all(
             isinstance(path, str) and isinstance(text, str)
             for path, text in files.items()
@@ -157,17 +256,26 @@ class PreviewBuffers:
         for filename, text in files.items():
             path = Path(filename).resolve()
             if not path.is_relative_to(root):
-                raise ValueError("Preview memory file is outside the worktree")
+                raise ValueError("Preview memory file is outside the preview root")
             normalized[str(path)] = text
+        # Reinsert so that this editor's text wins for files several editors hold.
+        self.editors.pop(client, None)
+        self.editors[client] = normalized
+        await self._mirror(websocket)
+
+    async def _mirror(self, websocket) -> None:
+        union = {}
+        for files in self.editors.values():
+            union.update(files)
         if not self.connected:
             await websocket.send(json.dumps({"event": "syncMemoryFiles", "files": {}}))
             removed = []
-            updates = normalized
+            updates = union
         else:
-            removed = list(self.files.keys() - normalized.keys())
+            removed = list(self.files.keys() - union.keys())
             updates = {
                 path: text
-                for path, text in normalized.items()
+                for path, text in union.items()
                 if self.files.get(path) != text
             }
         # Keep per-file invalidation events separate when replaying a mixture
@@ -180,7 +288,7 @@ class PreviewBuffers:
             await websocket.send(
                 json.dumps({"event": "updateMemoryFiles", "files": {path: text}})
             )
-        self.files = normalized
+        self.files = union
         if not self.connected:
             print("Live preview connected to Zed's unsaved buffers", flush=True)
         self.connected = True
@@ -226,7 +334,7 @@ async def stop_previous(path: Path, timeout: float = 15) -> None:
             path.unlink(missing_ok=True)
         return
     print(
-        "Stopping the synchronized preview already running for this worktree",
+        "Stopping the synchronized preview already running for this Typst root",
         flush=True,
     )
     try:
@@ -240,11 +348,11 @@ async def stop_previous(path: Path, timeout: float = 15) -> None:
 
 
 async def sync(args) -> None:
-    root = args.root.resolve(strict=True)
+    root = project_root(args.root, args.file)
     path = session_path(root)
     if not path.exists():
         raise ValueError(
-            "No synchronized preview for this worktree. Run 'Typst: Synchronized Preview' first."
+            f"No synchronized preview for {root}. Run 'Typst: Synchronized Preview' first."
         )
     try:
         await request(
@@ -339,16 +447,11 @@ async def serve_request(
                     )
                     await websocket.send(json.dumps(message))
             elif payload.get("event") == "buffers":
-                await buffers.update(websocket, root, payload["files"])
-            elif payload.get("event") == "disconnect":
-                async with buffers.lock:
-                    await buffers._update(websocket, root, {})
-                    buffers.connected = False
-                    buffers.live_connection.clear()
-                print(
-                    "Live editor buffers disconnected; preview reads saved files",
-                    flush=True,
+                await buffers.update(
+                    websocket, root, payload.get("client"), payload["files"]
                 )
+            elif payload.get("event") == "disconnect":
+                await buffers.disconnect(websocket, payload.get("client"))
             elif payload.get("event") == "stop" and stop is not None:
                 stop.set()
             elif payload.get("event") != "status":
@@ -428,8 +531,7 @@ async def report_missing_live_connection(
 
 
 async def start(args) -> None:
-    root = args.root.resolve(strict=True)
-    entry = source_file(root, str(args.file))
+    root, entry = typst_source(args.root, args.file)
     tinymist = shutil.which(args.tinymist)
     zed = shutil.which(args.zed)
     if not tinymist or not zed:
@@ -587,6 +689,16 @@ def parser() -> argparse.ArgumentParser:
     jump.add_argument(
         "--column", type=int, required=True, help="One-based UTF-8 byte ZED_COLUMN"
     )
+    tool = commands.add_parser(
+        "run",
+        help="Run 'typst compile', 'typst watch', or 'tinymist preview' with "
+        "the Typst root chosen for a file in a Zed worktree",
+    )
+    tool.add_argument("--root", type=Path, required=True)
+    tool.add_argument("--file", type=Path, required=True)
+    tool.add_argument(
+        "tool", nargs=argparse.REMAINDER, help="The command to run, after --"
+    )
     language_server = commands.add_parser(
         "lsp", help="Forward Tinymist LSP traffic and mirror unsaved edits"
     )
@@ -621,8 +733,11 @@ async def run(args) -> None:
 
 
 def main() -> int:
+    args = parser().parse_args()
     try:
-        asyncio.run(run(parser().parse_args()))
+        if args.command == "run":
+            return run_tool(args)
+        asyncio.run(run(args))
     except (KeyboardInterrupt, asyncio.CancelledError):
         return 130
     except (OSError, ValueError, RuntimeError, TimeoutError, ConnectionClosed) as error:

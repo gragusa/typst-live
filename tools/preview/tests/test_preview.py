@@ -3,6 +3,9 @@ import asyncio
 import contextlib
 import io
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -63,6 +66,30 @@ class Coordinates(unittest.TestCase):
         with self.assertRaises(ValueError):
             preview.scroll_request(self.root / "subdirectory", str(self.file), 1, 1)
 
+    def test_root_is_the_worktree_for_files_inside_it(self):
+        chapter = self.root / "chapters" / "intro.typ"
+        chapter.parent.mkdir()
+        chapter.write_text("Text", encoding="utf-8")
+        self.assertEqual(preview.project_root(self.root, chapter), self.root)
+
+    def test_root_is_the_file_directory_for_files_outside_the_worktree(self):
+        worktree = self.root / "project"
+        outside = self.root / "downloads" / "notes.typ"
+        worktree.mkdir()
+        outside.parent.mkdir()
+        outside.write_text("Text", encoding="utf-8")
+        self.assertEqual(preview.project_root(worktree, outside), outside.parent)
+        self.assertEqual(preview.project_root(worktree, str(outside)), outside.parent)
+
+    def test_single_file_worktree_root_is_its_directory(self):
+        self.file.write_text("Text", encoding="utf-8")
+        self.assertEqual(preview.worktree_directory(self.file), self.root)
+        self.assertEqual(preview.project_root(self.file, self.file), self.root)
+
+    def test_missing_worktree_fails(self):
+        with self.assertRaises(FileNotFoundError):
+            preview.project_root(self.root / "missing", self.file)
+
     def test_different_worktrees_have_different_session_files(self):
         directory = self.root / "runtime"
         with patch.dict(
@@ -93,6 +120,90 @@ class Coordinates(unittest.TestCase):
         self.assertEqual(
             args.extra, ["--font-path", "/custom fonts", "--input", "draft=true"]
         )
+
+
+class RunTool(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="typst run test ")
+        self.addCleanup(self.temporary.cleanup)
+        base = Path(self.temporary.name).resolve()
+        self.worktree = base / "project"
+        self.outside = base / "downloads with spaces" / "notes.typ"
+        self.tools = base / "tools"
+        for directory in (self.worktree, self.outside.parent, self.tools):
+            directory.mkdir()
+        self.outside.write_text("Text", encoding="utf-8")
+
+    def test_root_follows_the_subcommand(self):
+        root = Path("/chosen root")
+        self.assertEqual(
+            preview.tool_command(root, ["typst", "compile", "a.typ", "a-{p}.png"]),
+            ["typst", "compile", "--root", "/chosen root", "a.typ", "a-{p}.png"],
+        )
+        self.assertEqual(
+            preview.tool_command(root, ["/bin/tinymist", "preview", "--open", "a.typ"]),
+            ["/bin/tinymist", "preview", "--root", "/chosen root", "--open", "a.typ"],
+        )
+        self.assertEqual(
+            preview.tool_command(root, ["typst.exe", "watch", "a.typ"])[:4],
+            ["typst.exe", "watch", "--root", "/chosen root"],
+        )
+
+    def test_other_commands_and_explicit_roots_are_rejected(self):
+        for command in [[], ["typst"], ["typst", "fonts"], ["sh", "compile"]]:
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(ValueError, "run accepts only"):
+                    preview.tool_command(Path("/root"), command)
+        for flag in [["--root", "/other"], ["--root=/other"]]:
+            with self.subTest(flag=flag):
+                with self.assertRaisesRegex(ValueError, "chooses the Typst root"):
+                    preview.tool_command(
+                        Path("/root"), ["typst", "compile", *flag, "a.typ"]
+                    )
+
+    def run_companion(self, *tool, path=None):
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "zed_typst_preview",
+                "run",
+                "--root",
+                str(self.worktree),
+                "--file",
+                str(self.outside),
+                "--",
+                *tool,
+            ],
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "PATH": path or f"{self.tools}{os.pathsep}{os.environ['PATH']}",
+            },
+            timeout=20,
+        )
+
+    @unittest.skipIf(os.name == "nt", "the stand-in tool is a POSIX shell script")
+    def test_tool_runs_with_the_file_directory_as_root(self):
+        tool = self.tools / "typst"
+        tool.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@"\nexit 3\n', encoding="utf-8")
+        tool.chmod(0o755)
+        result = self.run_companion("typst", "compile", str(self.outside), "out-{p}.png")
+        self.assertEqual(result.returncode, 3, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertIn(f"using its directory {self.outside.parent}", lines[0])
+        self.assertEqual(
+            lines[1:],
+            ["compile", "--root", str(self.outside.parent), str(self.outside), "out-{p}.png"],
+        )
+
+    def test_missing_tool_is_reported(self):
+        result = self.run_companion(
+            "tinymist", "preview", str(self.outside), path=str(self.tools)
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("tinymist must be executable; check PATH", result.stderr)
 
 
 class Connection(unittest.IsolatedAsyncioTestCase):
@@ -168,7 +279,8 @@ class Connection(unittest.IsolatedAsyncioTestCase):
         self.websocket.send.side_effect = ConnectionClosed(None, None)
         with self.assertRaises(preview.PreviewNotReady):
             await preview.request(
-                self.session, {"event": "buffers", "files": {str(self.file): "é"}}
+                self.session,
+                {"event": "buffers", "client": "editor", "files": {str(self.file): "é"}},
             )
 
     async def test_invalid_source_position_is_reported_to_the_task(self):
@@ -261,6 +373,29 @@ class Connection(unittest.IsolatedAsyncioTestCase):
             await preview.sync(
                 argparse.Namespace(root=self.root, file=self.file, row=1, column=1)
             )
+
+    async def test_sync_outside_the_worktree_uses_the_file_directory_session(self):
+        worktree = self.root / "project"
+        worktree.mkdir()
+        outside = self.root / "downloads" / "notes.typ"
+        outside.parent.mkdir()
+        outside.write_text("Text", encoding="utf-8")
+        with (
+            patch.dict(
+                "os.environ",
+                {"ZED_TYPST_PREVIEW_RUNTIME_DIR": str(self.root / "runtime")},
+            ),
+            patch.object(preview, "request", AsyncMock()) as request,
+        ):
+            preview.publish_session(
+                preview.session_path(outside.parent),
+                {"port": 1, "token": "t" * 32},
+            )
+            with contextlib.redirect_stdout(io.StringIO()):
+                await preview.sync(
+                    argparse.Namespace(root=worktree, file=outside, row=1, column=1)
+                )
+        self.assertEqual(request.await_args.args[0], {"port": 1, "token": "t" * 32})
 
 
 if __name__ == "__main__":

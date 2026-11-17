@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import io
 import json
 import tempfile
@@ -216,7 +217,7 @@ class LivePreview(unittest.IsolatedAsyncioTestCase):
             buffers = preview.PreviewBuffers(wait_for_compile=True)
             websocket = AsyncMock()
             with self.assertRaises(preview.PreviewNotReady):
-                await buffers.update(websocket, Path(directory).resolve(), {})
+                await buffers.update(websocket, Path(directory).resolve(), "editor", {})
             websocket.send.assert_not_called()
 
     async def test_startup_sync_cannot_erase_a_concurrent_buffer_snapshot(self):
@@ -238,7 +239,9 @@ class LivePreview(unittest.IsolatedAsyncioTestCase):
 
             websocket.send.side_effect = send
             websocket.__aiter__.side_effect = incoming
-            update = asyncio.create_task(buffers.update(websocket, root, files))
+            update = asyncio.create_task(
+                buffers.update(websocket, root, "editor", files)
+            )
             await started.wait()
             startup = asyncio.create_task(
                 preview.editor_messages(websocket, root, "zed", buffers)
@@ -257,9 +260,9 @@ class LivePreview(unittest.IsolatedAsyncioTestCase):
             root = Path(directory).resolve()
             first, second = str(root / "first.typ"), str(root / "second.typ")
             buffers, websocket = preview.PreviewBuffers(), AsyncMock()
-            await buffers.update(websocket, root, {first: "Old", second: "Same"})
-            await buffers.update(websocket, root, {first: "New", second: "Same"})
-            await buffers.update(websocket, root, {first: "New"})
+            await buffers.update(websocket, root, "editor", {first: "Old", second: "Same"})
+            await buffers.update(websocket, root, "editor", {first: "New", second: "Same"})
+            await buffers.update(websocket, root, "editor", {first: "New"})
             messages = [
                 json.loads(call.args[0]) for call in websocket.send.await_args_list
             ]
@@ -273,6 +276,75 @@ class LivePreview(unittest.IsolatedAsyncioTestCase):
                     {"event": "removeMemoryFiles", "files": [second]},
                 ],
             )
+
+    async def test_buffers_from_several_editors_are_merged(self):
+        # Zed gives each file opened from outside the project folders its own
+        # language server, so one preview hears from one proxy per file.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            main, chapter = str(root / "main.typ"), str(root / "chapter.typ")
+            buffers, websocket = preview.PreviewBuffers(), AsyncMock()
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                await buffers.update(websocket, root, "first", {main: "Main"})
+                await buffers.update(websocket, root, "second", {chapter: "Chapter"})
+                self.assertEqual(buffers.files, {main: "Main", chapter: "Chapter"})
+                await buffers.update(websocket, root, "first", {main: "Edited"})
+                self.assertEqual(buffers.files, {main: "Edited", chapter: "Chapter"})
+                await buffers.disconnect(websocket, "first")
+                self.assertEqual(buffers.files, {chapter: "Chapter"})
+                self.assertTrue(buffers.connected)
+                self.assertNotIn("disconnected", output.getvalue())
+                await buffers.disconnect(websocket, "second")
+            self.assertEqual(buffers.files, {})
+            self.assertFalse(buffers.connected)
+            self.assertFalse(buffers.live_connection.is_set())
+            self.assertIn("preview reads saved files", output.getvalue())
+            messages = [
+                json.loads(call.args[0]) for call in websocket.send.await_args_list
+            ]
+            self.assertEqual(
+                messages,
+                [
+                    {"event": "syncMemoryFiles", "files": {}},
+                    {"event": "updateMemoryFiles", "files": {main: "Main"}},
+                    {"event": "updateMemoryFiles", "files": {chapter: "Chapter"}},
+                    {"event": "updateMemoryFiles", "files": {main: "Edited"}},
+                    {"event": "removeMemoryFiles", "files": [main]},
+                    {"event": "removeMemoryFiles", "files": [chapter]},
+                ],
+            )
+
+    async def test_latest_editor_wins_for_a_shared_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            main = str(root / "main.typ")
+            buffers, websocket = preview.PreviewBuffers(), AsyncMock()
+            with contextlib.redirect_stdout(io.StringIO()):
+                await buffers.update(websocket, root, "first", {main: "First"})
+                await buffers.update(websocket, root, "second", {main: "Second"})
+                self.assertEqual(buffers.files, {main: "Second"})
+                await buffers.update(websocket, root, "first", {main: "First again"})
+                self.assertEqual(buffers.files, {main: "First again"})
+                await buffers.disconnect(websocket, "first")
+            self.assertEqual(buffers.files, {main: "Second"})
+
+    async def test_buffer_requests_need_an_editor_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            buffers, websocket = preview.PreviewBuffers(), AsyncMock()
+            for client in [None, "", 1]:
+                with self.subTest(client=client):
+                    with self.assertRaisesRegex(TypeError, "no editor ID"):
+                        await buffers.update(websocket, root, client, {})
+                    with self.assertRaisesRegex(TypeError, "no editor ID"):
+                        await buffers.disconnect(websocket, client)
+            websocket.send.assert_not_called()
+
+    async def test_unknown_editor_disconnect_changes_nothing(self):
+        buffers, websocket = preview.PreviewBuffers(), AsyncMock()
+        await buffers.disconnect(websocket, "unknown")
+        websocket.send.assert_not_called()
+        self.assertFalse(buffers.connected)
 
     async def test_cursor_jumps_use_unsaved_text_without_saving_it(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,5 +1,6 @@
 """Run with TINYMIST_TEST_BINARY=/path/to/tinymist to exercise the real preview."""
 
+import argparse
 import asyncio
 import contextlib
 import io
@@ -99,6 +100,38 @@ class Tinymist(unittest.IsolatedAsyncioTestCase):
                     await asyncio.wait_for(process.wait(), 10)
                     self.assertEqual(list(runtime.glob("*.json")), [])
                     await assert_closed(port)
+                finally:
+                    if process.returncode is None:
+                        process.kill()
+                        await process.wait()
+
+    async def test_file_outside_the_worktree_previews_from_its_directory(self):
+        with tempfile.TemporaryDirectory(prefix="zed typst outside ") as directory:
+            base = Path(directory).resolve()
+            worktree = base / "project"
+            entry = base / "downloads" / "notes.typ"
+            worktree.mkdir()
+            entry.parent.mkdir()
+            entry.write_text("Outside the worktree.", encoding="utf-8")
+            runtime = base / "runtime"
+            environment = {**os.environ, "ZED_TYPST_PREVIEW_RUNTIME_DIR": str(runtime)}
+            with tempfile.TemporaryFile(mode="w+") as logs:
+                process = await launch(worktree, entry, environment, logs)
+                try:
+                    await self.ready_port(process, logs)
+                    self.assertIn(f"using its directory {entry.parent}", output(logs))
+                    with patch.dict(os.environ, environment):
+                        [record] = runtime.glob("*.json")
+                        self.assertEqual(record, preview.session_path(entry.parent))
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            await preview.sync(
+                                argparse.Namespace(
+                                    root=worktree, file=entry, row=1, column=1
+                                )
+                            )
+                    process.terminate()
+                    await asyncio.wait_for(process.wait(), 10)
+                    self.assertEqual(list(runtime.glob("*.json")), [])
                 finally:
                     if process.returncode is None:
                         process.kill()

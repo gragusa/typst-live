@@ -14,7 +14,7 @@ The extension already uses Tinymist as its language server. The goal is to expos
 | Writing snippets | Twelve snippets with tab stops | Add examples and refine based on writing workflows. |
 | Font discovery | CLI font listing task | A font gallery requires a richer UI or browser companion. |
 | Server startup | Custom path, arguments, environment, automatic download, offline fallback | Test automatic installation on macOS, Linux, and Windows. |
-| Cursor synchronization | Optional companion: task-triggered source-to-preview jumps and preview-click-to-source jumps, using unsaved buffers | Continuous cursor following needs editor movement events. |
+| Cursor synchronization | Companion: task-triggered source-to-preview jumps and preview-click-to-source jumps, using unsaved buffers | Continuous cursor following needs editor movement events. |
 | Embedded preview | No integration | Requires an embedded UI API. |
 | Template, symbol, package, and document-summary views | No integration | Evaluate browser interfaces and available Tinymist commands. |
 | Profiling and Typst debugging | No integration | Investigate Tinymist's profiler and DAP support as separate features. |

@@ -1,11 +1,16 @@
 [
   {
     "label": "Typst: Export File",
-    "command": "typst",
+    "command": "zed-typst-preview",
     "args": [
-      "compile",
+      "run",
       "--root",
       "$ZED_WORKTREE_ROOT",
+      "--file",
+      "$ZED_FILE",
+      "--",
+      "typst",
+      "compile",
       "$ZED_FILE"
     ],
     "save": "all",
@@ -13,11 +18,16 @@
   },
   {
     "label": "Typst: Export PNG",
-    "command": "typst",
+    "command": "zed-typst-preview",
     "args": [
-      "compile",
+      "run",
       "--root",
       "$ZED_WORKTREE_ROOT",
+      "--file",
+      "$ZED_FILE",
+      "--",
+      "typst",
+      "compile",
       "$ZED_FILE",
       "$ZED_DIRNAME/$ZED_STEM-{p}.png"
     ],
@@ -26,11 +36,16 @@
   },
   {
     "label": "Typst: Export SVG",
-    "command": "typst",
+    "command": "zed-typst-preview",
     "args": [
-      "compile",
+      "run",
       "--root",
       "$ZED_WORKTREE_ROOT",
+      "--file",
+      "$ZED_FILE",
+      "--",
+      "typst",
+      "compile",
       "$ZED_FILE",
       "$ZED_DIRNAME/$ZED_STEM-{p}.svg"
     ],
@@ -39,11 +54,16 @@
   },
   {
     "label": "Typst: Watch File",
-    "command": "typst",
+    "command": "zed-typst-preview",
     "args": [
-      "watch",
+      "run",
       "--root",
       "$ZED_WORKTREE_ROOT",
+      "--file",
+      "$ZED_FILE",
+      "--",
+      "typst",
+      "watch",
       "$ZED_FILE"
     ],
     "save": "all",
@@ -52,16 +72,21 @@
   },
   {
     "label": "Typst: Open Preview",
-    "command": "tinymist",
+    "command": "zed-typst-preview",
     "args": [
+      "run",
+      "--root",
+      "$ZED_WORKTREE_ROOT",
+      "--file",
+      "$ZED_FILE",
+      "--",
+      "tinymist",
       "preview",
       "--open",
       "--data-plane-host",
       "127.0.0.1:0",
       "--control-plane-host",
       "127.0.0.1:0",
-      "--root",
-      "$ZED_WORKTREE_ROOT",
       "$ZED_FILE"
     ],
     "save": "all",
@@ -70,8 +95,15 @@
   },
   {
     "label": "Typst: Preview Slides",
-    "command": "tinymist",
+    "command": "zed-typst-preview",
     "args": [
+      "run",
+      "--root",
+      "$ZED_WORKTREE_ROOT",
+      "--file",
+      "$ZED_FILE",
+      "--",
+      "tinymist",
       "preview",
       "--open",
       "--data-plane-host",
@@ -80,8 +112,6 @@
       "127.0.0.1:0",
       "--preview-mode",
       "slide",
-      "--root",
-      "$ZED_WORKTREE_ROOT",
       "$ZED_FILE"
     ],
     "save": "all",

@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import os
+import secrets
 import sys
 import threading
 from pathlib import Path
@@ -107,6 +108,8 @@ class Buffers:
         self.initialize_id = None
         self.revision = 0
         self.preview_session = None
+        # Identifies this proxy to a preview that also receives other proxies' buffers.
+        self.client = secrets.token_urlsafe(16)
 
     def filepath(self, uri: str) -> str | None:
         parsed = urlsplit(uri)
@@ -186,7 +189,12 @@ async def mirror_buffers(buffers: Buffers, changed: asyncio.Event) -> None:
             if current != sent:
                 try:
                     await request(
-                        session, {"event": "buffers", "files": dict(buffers.files)}
+                        session,
+                        {
+                            "event": "buffers",
+                            "client": buffers.client,
+                            "files": dict(buffers.files),
+                        },
                     )
                 except (ConnectionError, TimeoutError, PreviewNotReady) as error:
                     if was_connected:
@@ -225,7 +233,9 @@ def stdin_frames(loop, queue) -> None:
 
 
 async def proxy(args) -> None:
-    buffers = Buffers(args.root.resolve(strict=True))
+    from . import worktree_directory
+
+    buffers = Buffers(worktree_directory(args.root))
     changed = asyncio.Event()
     arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
     # Windows stdio must carry the LSP bytes without newline translation.
@@ -290,7 +300,10 @@ async def proxy(args) -> None:
             from . import request
 
             try:
-                await request(buffers.preview_session, {"event": "disconnect"})
+                await request(
+                    buffers.preview_session,
+                    {"event": "disconnect", "client": buffers.client},
+                )
             except (OSError, ValueError, TimeoutError) as error:
                 print(
                     f"Could not detach preview buffers: {error}",
